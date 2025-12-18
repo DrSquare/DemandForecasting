@@ -1,0 +1,137 @@
+{
+  "config": {
+    "data_path": "../Data/salty_snack_0.05_store.csv",
+    "product_path": "../Data/prod_saltsnck.xls",
+    "output_dir": "output",
+    "val_week_start": 1375,
+    "market_potential_multiplier": 3.0,
+    "verbose": true,
+    "save_results": true
+  },
+  "model_configs": {
+    "linear_regression": {},
+    "linear_regression_pfe": {},
+    "mixed_effects": {
+      "group_col": "colupc",
+      "random_effect_vars": [
+        "logprice"
+      ]
+    },
+    "homogeneous_logit": {},
+    "lightgbm": {
+      "n_estimators": 100,
+      "max_depth": 6,
+      "learning_rate": 0.1,
+      "random_state": 42,
+      "verbosity": -1
+    },
+    "random_forest": {
+      "n_estimators": 100,
+      "max_depth": 10,
+      "random_state": 42,
+      "n_jobs": -1
+    }
+  },
+  "metrics": {
+    "Linear Regression": {
+      "rmse": 39.593550603062425,
+      "r2": 0.31154272629311985,
+      "mape": 1.8638588106456413,
+      "mpe": -1.570484893509461,
+      "wmape": 0.7126909365301763,
+      "counterfactual_validity": 0.0
+    },
+    "Linear Regression (Product FE)": {
+      "rmse": 33.40006334455102,
+      "r2": 0.5100828136630529,
+      "mape": 1.3025384629919488,
+      "mpe": -1.017667860024161,
+      "wmape": 0.5835500356213311,
+      "counterfactual_validity": 0.0
+    },
+    "Mixed Effects (Random Slopes)": {
+      "rmse": 183.90129458663716,
+      "r2": -13.852435220722292,
+      "mape": 3.2517716945448853,
+      "mpe": -2.562412439761352,
+      "wmape": 0.9424252831937431,
+      "counterfactual_validity": 0.0
+    },
+    "Homogeneous Logit": {
+      "rmse": 39.393209435948066,
+      "r2": 0.3184922108345697,
+      "mape": 1.9121034408714785,
+      "mpe": -1.6309642400942015,
+      "wmape": 0.7161407766516026,
+      "counterfactual_validity": 0.0
+    },
+    "LightGBM": {
+      "rmse": 39.91392998744688,
+      "r2": 0.30035606089221945,
+      "mape": 1.1591470705739764,
+      "mpe": -0.7082144873601462,
+      "wmape": 0.6404011093793094,
+      "counterfactual_validity": 0.3343348811800055
+    },
+    "Random Forest": {
+      "rmse": 40.250082788021224,
+      "r2": 0.2885217145187281,
+      "mape": 1.2299716821101603,
+      "mpe": -0.7581513987895083,
+      "wmape": 0.6647752216663938,
+      "counterfactual_validity": 0.573067467904944
+    }
+  },
+  "comparison": {
+    "rmse": {
+      "Linear Regression (Product FE)": 33.40006334455102,
+      "LightGBM": 39.91392998744688,
+      "Random Forest": 40.250082788021224,
+      "Linear Regression": 39.593550603062425,
+      "Homogeneous Logit": 39.393209435948066,
+      "Mixed Effects (Random Slopes)": 183.90129458663716
+    },
+    "r2": {
+      "Linear Regression (Product FE)": 0.5100828136630529,
+      "LightGBM": 0.30035606089221945,
+      "Random Forest": 0.2885217145187281,
+      "Linear Regression": 0.31154272629311985,
+      "Homogeneous Logit": 0.3184922108345697,
+      "Mixed Effects (Random Slopes)": -13.852435220722292
+    },
+    "mape": {
+      "Linear Regression (Product FE)": 1.3025384629919488,
+      "LightGBM": 1.1591470705739764,
+      "Random Forest": 1.2299716821101603,
+      "Linear Regression": 1.8638588106456413,
+      "Homogeneous Logit": 1.9121034408714785,
+      "Mixed Effects (Random Slopes)": 3.2517716945448853
+    },
+    "mpe": {
+      "Linear Regression (Product FE)": -1.017667860024161,
+      "LightGBM": -0.7082144873601462,
+      "Random Forest": -0.7581513987895083,
+      "Linear Regression": -1.570484893509461,
+      "Homogeneous Logit": -1.6309642400942015,
+      "Mixed Effects (Random Slopes)": -2.562412439761352
+    },
+    "wmape": {
+      "Linear Regression (Product FE)": 0.5835500356213311,
+      "LightGBM": 0.6404011093793094,
+      "Random Forest": 0.6647752216663938,
+      "Linear Regression": 0.7126909365301763,
+      "Homogeneous Logit": 0.7161407766516026,
+      "Mixed Effects (Random Slopes)": 0.9424252831937431
+    },
+    "counterfactual_validity": {
+      "Linear Regression (Product FE)": 0.0,
+      "LightGBM": 0.3343348811800055,
+      "Random Forest": 0.573067467904944,
+      "Linear Regression": 0.0,
+      "Homogeneous Logit": 0.0,
+      "Mixed Effects (Random Slopes)": 0.0
+    }
+  },
+  "best_model": "Linear Regression (Product FE)",
+  "timestamp": "2025-12-05 22:34:25"
+}

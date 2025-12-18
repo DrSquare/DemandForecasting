@@ -1,0 +1,72 @@
+{
+  "config": {
+    "data_path": "../Data/salty_snack_0.05_store.csv",
+    "output_dir": "output",
+    "val_week_start": 1375,
+    "forecast_horizon": 52,
+    "context_length": 104,
+    "random_seed": 42,
+    "verbose": true,
+    "save_results": true
+  },
+  "metrics": {
+    "TimesFM 2.0": {
+      "rmse": 35.853824272272426,
+      "r2": 0.07666183193313425,
+      "mape": 1.1751442804543237,
+      "mpe": -0.7555443843385401,
+      "wmape": 0.7206265065489811,
+      "counterfactual_validity": null
+    },
+    "SunDial (Chronos)": {
+      "rmse": 39.349703555705155,
+      "r2": 0.3483216166496277,
+      "mape": 0.7654960924654353,
+      "mpe": -0.31284538120979577,
+      "wmape": 0.527248888526523,
+      "counterfactual_validity": null
+    },
+    "TabPFN-TS": {
+      "rmse": 20.160966766466764,
+      "r2": 0.7110958792812889,
+      "mape": 0.8400641294308712,
+      "mpe": -0.5892934844646608,
+      "wmape": 0.46970644509170445,
+      "counterfactual_validity": null
+    }
+  },
+  "comparison": {
+    "rmse": {
+      "TabPFN-TS": 20.160966766466764,
+      "SunDial (Chronos)": 39.349703555705155,
+      "TimesFM 2.0": 35.853824272272426
+    },
+    "r2": {
+      "TabPFN-TS": 0.7110958792812889,
+      "SunDial (Chronos)": 0.3483216166496277,
+      "TimesFM 2.0": 0.07666183193313425
+    },
+    "mape": {
+      "TabPFN-TS": 0.8400641294308712,
+      "SunDial (Chronos)": 0.7654960924654353,
+      "TimesFM 2.0": 1.1751442804543237
+    },
+    "mpe": {
+      "TabPFN-TS": -0.5892934844646608,
+      "SunDial (Chronos)": -0.31284538120979577,
+      "TimesFM 2.0": -0.7555443843385401
+    },
+    "wmape": {
+      "TabPFN-TS": 0.46970644509170445,
+      "SunDial (Chronos)": 0.527248888526523,
+      "TimesFM 2.0": 0.7206265065489811
+    },
+    "counterfactual_validity": {
+      "TabPFN-TS": NaN,
+      "SunDial (Chronos)": NaN,
+      "TimesFM 2.0": NaN
+    }
+  },
+  "best_model": "TabPFN-TS",
+  "timestamp": "2025-12-07 06:38:02"
+}
