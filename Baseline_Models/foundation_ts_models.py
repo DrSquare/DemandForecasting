@@ -2,8 +2,8 @@
 Foundation Time Series Models for Demand Forecasting
 
 This script trains and evaluates state-of-the-art foundation time series models:
-1. TimesFM 2.5 (Google) - Foundation model for time series forecasting
-2. SunDial (Amazon) - Time series foundation model
+1. TimesFM 2.0 (Google) - Foundation model for time series forecasting
+2. Chronos (Amazon) - Pretrained probabilistic time series model based on T5 language model
 3. TabPFN-TS - Tabular Prior-Data Fitted Network for Time Series
 
 Data: salty_snack_0.05_store.csv
@@ -28,7 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from evaluation_metrics import (
     evaluate_model, print_metrics, compare_models,
-    counterfactual_validity_by_store_week
+    counterfactual_validity_by_store_week,
+    print_comparison_summary
 )
 
 # ============================================================================
@@ -44,7 +45,43 @@ CONFIG = {
     'random_seed': 42,
     'verbose': True,
     'save_results': True,
+    'use_gpu': True,  # Set to False to force CPU usage
 }
+
+
+# ============================================================================
+# GPU Configuration
+# ============================================================================
+
+def setup_device(use_gpu: bool = True) -> str:
+    """
+    Setup and return the device to use for computation.
+
+    Args:
+        use_gpu: Whether to attempt using GPU
+
+    Returns:
+        Device string ('cuda' or 'cpu')
+    """
+    if not use_gpu:
+        print("GPU usage disabled by configuration")
+        return 'cpu'
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = 'cuda'
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"GPU Available: {gpu_name} ({gpu_memory:.1f} GB)")
+            print(f"CUDA Version: {torch.version.cuda}")
+            return device
+        else:
+            print("No GPU available, using CPU")
+            return 'cpu'
+    except ImportError:
+        print("PyTorch not installed, using CPU")
+        return 'cpu'
 
 
 # ============================================================================
@@ -135,31 +172,31 @@ def create_panel_time_series(df: pd.DataFrame) -> pd.DataFrame:
 class TimesFMModel:
     """
     TimesFM 2.0 - Google's Foundation Model for Time Series Forecasting.
-    
+
     Uses the PyTorch implementation via HuggingFace Transformers.
-    
+
     Paper: "A decoder-only foundation model for time-series forecasting"
     https://arxiv.org/abs/2310.10688
-    
+
     Model: google/timesfm-1.0-200m (PyTorch version)
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  context_length: int = 104,
                  forecast_horizon: int = 52,
-                 backend: str = 'cpu'):
+                 device: str = 'cpu'):
         """
         Initialize TimesFM model.
-        
+
         Args:
             context_length: Number of historical time steps to use
             forecast_horizon: Number of steps to forecast
-            backend: 'cpu' or 'gpu'
+            device: 'cpu' or 'cuda'
         """
         self.name = "TimesFM 2.0"
         self.context_length = context_length
         self.forecast_horizon = forecast_horizon
-        self.backend = backend
+        self.device = device
         self.model = None
         self.processor = None
         
@@ -168,41 +205,50 @@ class TimesFMModel:
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoConfig
-            
-            print(f"  Loading TimesFM model from HuggingFace (backend={self.backend})...")
-            
-            device = "cuda" if self.backend == 'gpu' and torch.cuda.is_available() else "cpu"
-            
+
+            print(f"  Loading TimesFM model from HuggingFace (device={self.device})...")
+
             # Try loading the PyTorch version
             try:
                 # TimesFM 1.0-200m model (smaller, faster)
                 model_name = "google/timesfm-1.0-200m-pytorch"
+
+                # Use appropriate dtype based on device
+                dtype = torch.float16 if self.device == "cuda" else torch.float32
+
                 self.model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     trust_remote_code=True,
-                    device_map=device,
-                    torch_dtype=torch.float32
+                    device_map=self.device,
+                    torch_dtype=dtype
                 )
-                print(f"  TimesFM model loaded successfully on {device}")
+
+                if self.device == "cuda":
+                    # Enable optimizations for GPU
+                    self.model = self.model.half()  # Use FP16 for faster inference
+                    torch.backends.cudnn.benchmark = True
+
+                print(f"  TimesFM model loaded successfully on {self.device} ({dtype})")
                 return True
             except Exception as e1:
                 print(f"  Could not load timesfm-1.0-200m-pytorch: {e1}")
-                
+
                 # Fallback: Try using a simple transformer-based forecaster
                 print("  Attempting fallback to Lag-Llama or similar...")
                 try:
                     from transformers import pipeline
+                    device_id = 0 if self.device == "cuda" else -1
                     self.model = pipeline(
                         "time-series-prediction",
                         model="huggingface/lag-llama",
-                        device=0 if device == "cuda" else -1
+                        device=device_id
                     )
-                    print("  Loaded Lag-Llama as fallback")
+                    print(f"  Loaded Lag-Llama as fallback on device {device_id}")
                     return True
                 except Exception as e2:
                     print(f"  Fallback also failed: {e2}")
                     return False
-                    
+
         except ImportError as e:
             print(f"  ERROR: Required packages not installed: {e}")
             print("  Install with: pip install transformers accelerate")
@@ -363,58 +409,71 @@ class TimesFMModel:
 
 
 # ============================================================================
-# SunDial Model
+# Chronos Model
 # ============================================================================
 
-class SunDialModel:
+class ChronosModel:
     """
-    SunDial - Amazon's Time Series Foundation Model.
-    
-    Paper: "Sundial: Aligning Time Series and Natural Language with Calendar Time"
-    https://arxiv.org/abs/2502.00816
-    
+    Chronos - Amazon's Time Series Foundation Model.
+
+    Paper: "Chronos: Learning the Language of Time Series"
+    https://arxiv.org/abs/2403.07815
+
+    Chronos is a framework for pretrained probabilistic time series models.
+    The models are based on language model architectures (T5) and trained on
+    a large corpus of time series data via cross-entropy minimization.
+
     Installation: pip install chronos-forecasting
-    Note: SunDial uses the Chronos architecture
     """
-    
+
     def __init__(self,
                  context_length: int = 104,
                  forecast_horizon: int = 52,
-                 model_size: str = "small"):
+                 model_size: str = "small",
+                 device: str = 'cpu'):
         """
-        Initialize SunDial/Chronos model.
-        
+        Initialize Chronos model.
+
         Args:
             context_length: Number of historical time steps
             forecast_horizon: Number of steps to forecast
             model_size: 'tiny', 'mini', 'small', 'base', 'large'
+            device: 'cpu' or 'cuda'
         """
-        self.name = "SunDial (Chronos)"
+        self.name = "Chronos"
         self.context_length = context_length
         self.forecast_horizon = forecast_horizon
         self.model_size = model_size
+        self.device = device
         self.model = None
         self.pipeline = None
-        
+
     def _load_model(self):
-        """Load the Chronos/SunDial model."""
+        """Load the Chronos model."""
         try:
             import torch
             from chronos import ChronosPipeline
-            
-            print(f"  Loading Chronos-{self.model_size} model...")
-            
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            
+
+            print(f"  Loading Chronos-{self.model_size} model on {self.device}...")
+
+            # Use appropriate dtype based on device
+            dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+
             self.pipeline = ChronosPipeline.from_pretrained(
                 f"amazon/chronos-t5-{self.model_size}",
-                device_map=device,
-                torch_dtype=torch.float32,
+                device_map=self.device,
+                torch_dtype=dtype,
             )
-            
-            print(f"  Chronos model loaded on {device}")
+
+            if self.device == "cuda":
+                # Enable optimizations for GPU
+                torch.backends.cudnn.benchmark = True
+                print(f"  Chronos model loaded on {self.device} with {dtype} precision")
+            else:
+                print(f"  Chronos model loaded on {self.device}")
+
             return True
-            
+
         except ImportError:
             print("  ERROR: chronos-forecasting not installed.")
             print("  Install with: pip install chronos-forecasting")
@@ -428,42 +487,42 @@ class SunDialModel:
                  val_panel: pd.DataFrame) -> pd.DataFrame:
         """
         Generate forecasts for all store-product combinations.
-        
+
         Args:
             train_panel: Training data panel
             val_panel: Validation data panel
-            
+
         Returns:
             DataFrame with predictions
         """
         if self.pipeline is None:
             if not self._load_model():
                 return None
-        
+
         import torch
-        
-        print(f"\n  Generating Chronos/SunDial forecasts...")
-        
+
+        print(f"\n  Generating Chronos forecasts...")
+
         combinations = val_panel[['store', 'product']].drop_duplicates()
         predictions = []
-        
+
         for _, row in tqdm(combinations.iterrows(),
                           total=len(combinations),
                           desc="  Forecasting"):
             store, product = row['store'], row['product']
-            
+
             # Get historical data
             hist = train_panel[
                 (train_panel['store'] == store) &
                 (train_panel['product'] == product)
             ].sort_values('week')
-            
+
             if len(hist) < 10:
                 continue
-            
+
             # Prepare context
             context = torch.tensor(hist['units'].values[-self.context_length:])
-            
+
             try:
                 # Generate forecast (returns samples from predictive distribution)
                 forecast = self.pipeline.predict(
@@ -471,16 +530,16 @@ class SunDialModel:
                     prediction_length=self.forecast_horizon,
                     num_samples=20
                 )
-                
+
                 # Take median as point forecast
                 point_forecast = np.median(forecast.numpy(), axis=1)[0]
-                
+
                 # Get validation weeks
                 val_weeks = val_panel[
                     (val_panel['store'] == store) &
                     (val_panel['product'] == product)
                 ]['week'].values
-                
+
                 for i, week in enumerate(val_weeks):
                     if i < len(point_forecast):
                         predictions.append({
@@ -489,17 +548,17 @@ class SunDialModel:
                             'week': week,
                             'predicted_units': max(0, point_forecast[i])
                         })
-                        
+
             except Exception as e:
                 continue
-        
+
         if not predictions:
             print("  WARNING: No predictions generated")
             return None
-            
+
         pred_df = pd.DataFrame(predictions)
         print(f"  Generated {len(pred_df)} predictions")
-        
+
         return pred_df
 
 
@@ -510,27 +569,30 @@ class SunDialModel:
 class TabPFNTSModel:
     """
     TabPFN-TS - Tabular Prior-Data Fitted Network for Time Series.
-    
-    Paper: "TabPFN: A Transformer That Solves Small Tabular Classification 
+
+    Paper: "TabPFN: A Transformer That Solves Small Tabular Classification
            Problems in a Second"
     Extended for time series forecasting.
-    
+
     Installation: pip install tabpfn
     """
-    
+
     def __init__(self,
                  context_length: int = 104,
-                 forecast_horizon: int = 52):
+                 forecast_horizon: int = 52,
+                 device: str = 'cpu'):
         """
         Initialize TabPFN-TS model.
-        
+
         Args:
             context_length: Number of historical time steps
             forecast_horizon: Number of steps to forecast
+            device: 'cpu' or 'cuda'
         """
         self.name = "TabPFN-TS"
         self.context_length = context_length
         self.forecast_horizon = forecast_horizon
+        self.device = device
         self.model = None
         
     def _load_model(self):
@@ -538,17 +600,19 @@ class TabPFNTSModel:
         try:
             from tabpfn import TabPFNRegressor
             from tabpfn.regressor import ModelVersion
-            
-            print("  Loading TabPFN V2 model (open source)...")
+
+            print(f"  Loading TabPFN V2 model on {self.device}...")
+
             # Use V2 instead of V2.5 to avoid HuggingFace license issues
             self.model = TabPFNRegressor.create_default_for_version(
                 ModelVersion.V2,
-                device='cuda' if __import__('torch').cuda.is_available() else 'cpu',
+                device=self.device,
                 ignore_pretraining_limits=True  # Allow more than 1000 samples
             )
-            print("  TabPFN V2 model loaded successfully")
+
+            print(f"  TabPFN V2 model loaded successfully on {self.device}")
             return True
-            
+
         except ImportError:
             print("  ERROR: tabpfn not installed.")
             print("  Install with: pip install tabpfn")
@@ -704,17 +768,163 @@ class TabPFNTSModel:
 # Evaluation Functions
 # ============================================================================
 
+def compute_tabpfn_counterfactual_validity(
+    model: TabPFNTSModel,
+    train_panel: pd.DataFrame,
+    val_panel: pd.DataFrame,
+    price_multiplier: float = 0.9,
+    random_seed: int = 42
+) -> float:
+    """
+    Compute counterfactual validity for TabPFN-TS model.
+
+    TabPFN-TS uses price as an explicit feature (lagged price and price ratio),
+    so we can compute counterfactual validity by reducing prices and checking
+    if predicted demand increases.
+
+    For each store-week, we:
+    1. Randomly select one product
+    2. Decrease only that product's price by (1 - price_multiplier)
+    3. Check if the predicted demand increases
+
+    Args:
+        model: Trained TabPFN-TS model instance
+        train_panel: Training data panel
+        val_panel: Validation data panel
+        price_multiplier: Price change factor (0.9 = 10% decrease)
+        random_seed: Random seed for reproducibility
+
+    Returns:
+        Percentage of store-weeks where the counterfactual is invalid
+        (demand did not increase when price decreased)
+    """
+    if model.model is None:
+        print("    WARNING: Model not trained, cannot compute counterfactual validity")
+        return 0.0
+
+    np.random.seed(random_seed)
+
+    # Get unique store-week combinations from validation set
+    store_weeks = val_panel.groupby(['store', 'week']).size().reset_index()[['store', 'week']]
+
+    invalid_count = 0
+    total_count = 0
+
+    for _, row in tqdm(store_weeks.iterrows(),
+                      total=len(store_weeks),
+                      desc="    Counterfactual",
+                      leave=False):
+        store = row['store']
+        week = row['week']
+
+        # Get all products for this store-week
+        mask = (val_panel['store'] == store) & (val_panel['week'] == week)
+        products_in_store_week = val_panel[mask]['product'].unique()
+
+        if len(products_in_store_week) == 0:
+            continue
+
+        # Randomly select one product
+        selected_product = np.random.choice(products_in_store_week)
+
+        # Get training data for this store-product combination
+        train_data = train_panel[
+            (train_panel['store'] == store) &
+            (train_panel['product'] == selected_product)
+        ].sort_values('week')
+
+        if len(train_data) < 52:
+            continue
+
+        # Get validation data for this specific observation
+        val_data = val_panel[
+            (val_panel['store'] == store) &
+            (val_panel['product'] == selected_product)
+        ].sort_values('week')
+
+        # Find the index of the selected week in validation
+        week_mask = val_data['week'] == week
+        if not week_mask.any():
+            continue
+
+        week_position = np.where(week_mask)[0][0]
+
+        # Prepare data
+        units = train_data['units'].values
+        prices = train_data['price'].values
+
+        # Combine with validation data
+        all_units = np.concatenate([units, val_data['units'].values])
+        all_prices = np.concatenate([prices, val_data['price'].values])
+
+        # Calculate week index for prediction
+        week_idx = len(units) + week_position
+
+        try:
+            # Re-fit model on this store-product combination
+            X_train = []
+            y_train = []
+
+            for i in range(52, len(units)):
+                X_train.append(model._create_features(units, prices, i))
+                y_train.append(units[i])
+
+            if len(X_train) == 0:
+                continue
+
+            X_train = np.array(X_train)
+            y_train = np.array(y_train)
+
+            # Limit training size
+            if len(X_train) > 1024:
+                X_train = X_train[-1024:]
+                y_train = y_train[-1024:]
+
+            # Fit model
+            model.model.fit(X_train, y_train)
+
+            # Baseline prediction
+            X_baseline = model._create_features(all_units, all_prices, week_idx).reshape(1, -1)
+            y_baseline = model.model.predict(X_baseline)[0]
+
+            # Counterfactual: reduce price
+            all_prices_cf = all_prices.copy()
+            all_prices_cf[week_idx] = all_prices[week_idx] * price_multiplier
+
+            X_cf = model._create_features(all_units, all_prices_cf, week_idx).reshape(1, -1)
+            y_cf = model.model.predict(X_cf)[0]
+
+            # Check validity: demand should increase when price decreases
+            if y_cf <= y_baseline:
+                invalid_count += 1
+
+            total_count += 1
+
+        except Exception:
+            # Skip if prediction fails
+            continue
+
+    if total_count == 0:
+        return 0.0
+
+    return invalid_count / total_count
+
+
 def evaluate_forecasts(predictions: pd.DataFrame,
                        actual_data: pd.DataFrame,
-                       model_name: str) -> Dict:
+                       model_name: str,
+                       model=None,
+                       train_panel: pd.DataFrame = None) -> Dict:
     """
     Evaluate forecast predictions against actual values.
-    
+
     Args:
         predictions: DataFrame with predicted_units
         actual_data: DataFrame with actual units
         model_name: Name of the model
-        
+        model: Model instance (optional, for counterfactual validity)
+        train_panel: Training panel data (optional, for counterfactual validity)
+
     Returns:
         Dictionary with evaluation metrics
     """
@@ -724,38 +934,61 @@ def evaluate_forecasts(predictions: pd.DataFrame,
         on=['store', 'product', 'week'],
         how='inner'
     )
-    
+
     if len(merged) == 0:
         print(f"  WARNING: No matching predictions for {model_name}")
         return None
-    
+
     actual = merged['units'].values
     predicted = merged['predicted_units'].values
     weights = actual * merged['price'].values
-    
-    # Evaluate
+
+    # Evaluate basic metrics
     metrics = evaluate_model(actual, predicted, weights=weights, forecast_counterfactual=None)
-    
-    # Time series models don't have counterfactual validity (they're not causal)
-    metrics['counterfactual_validity'] = np.nan
-    
+
+    # Compute counterfactual validity for TabPFN-TS (which uses price features)
+    if model is not None and isinstance(model, TabPFNTSModel) and train_panel is not None:
+        print("  Computing counterfactual validity for TabPFN-TS...")
+        cf_validity = compute_tabpfn_counterfactual_validity(
+            model, train_panel, actual_data, price_multiplier=0.9
+        )
+        metrics['counterfactual_validity'] = cf_validity
+    else:
+        # Note: TimesFM and Chronos don't explicitly model price,
+        # so counterfactual validity is not applicable
+        # We set it to 0.0 to indicate "not computed" (different from invalid predictions)
+        metrics['counterfactual_validity'] = 0.0
+
     return metrics
 
 
-def compute_ts_counterfactual_validity(model, 
+def compute_ts_counterfactual_validity(model,
                                         train_panel: pd.DataFrame,
                                         val_panel: pd.DataFrame,
                                         price_multiplier: float = 0.9) -> float:
     """
     Compute counterfactual validity for time series models.
-    
-    Note: Time series foundation models are not designed for causal inference,
-    so counterfactual validity may not be meaningful. This is included for
-    comparison purposes only.
+
+    Note: Most foundation time series models (TimesFM, Chronos) don't
+    explicitly use price as input - they learn patterns from historical demand only.
+    Therefore, they cannot generate price-based counterfactuals.
+
+    TabPFN-TS is an exception - it uses price features and can compute
+    counterfactual validity via compute_tabpfn_counterfactual_validity().
+
+    This function returns 0.0 to indicate "not computed" for models without
+    price features (distinct from having invalid predictions).
+
+    Args:
+        model: Time series model instance
+        train_panel: Training data panel
+        val_panel: Validation data panel
+        price_multiplier: Price change factor (unused for most TS models)
+
+    Returns:
+        0.0 (metric not applicable for time series models without price features)
     """
-    # For time series models without price as explicit input,
-    # counterfactual validity is not applicable
-    return np.nan
+    return 0.0
 
 
 # ============================================================================
@@ -764,7 +997,7 @@ def compute_ts_counterfactual_validity(model,
 
 def main():
     """Main training and evaluation pipeline."""
-    
+
     print("=" * 80)
     print("FOUNDATION TIME SERIES MODELS - DEMAND FORECASTING")
     print("=" * 80)
@@ -773,7 +1006,12 @@ def main():
     print(f"  Validation week start: {CONFIG['val_week_start']}")
     print(f"  Forecast horizon: {CONFIG['forecast_horizon']} weeks")
     print(f"  Context length: {CONFIG['context_length']} weeks")
-    
+    print(f"  GPU enabled: {CONFIG['use_gpu']}")
+
+    # Setup device (GPU/CPU)
+    device = setup_device(use_gpu=CONFIG['use_gpu'])
+    print(f"  Device: {device}")
+
     # Create output directory
     os.makedirs(CONFIG['output_dir'], exist_ok=True)
     
@@ -803,16 +1041,18 @@ def main():
         'TimesFM 2.0': TimesFMModel(
             context_length=CONFIG['context_length'],
             forecast_horizon=CONFIG['forecast_horizon'],
-            backend='gpu' if __import__('torch').cuda.is_available() else 'cpu'
+            device=device
         ),
-        'SunDial (Chronos)': SunDialModel(
+        'Chronos': ChronosModel(
             context_length=CONFIG['context_length'],
             forecast_horizon=CONFIG['forecast_horizon'],
-            model_size='small'
+            model_size='small',
+            device=device
         ),
         'TabPFN-TS': TabPFNTSModel(
             context_length=CONFIG['context_length'],
-            forecast_horizon=CONFIG['forecast_horizon']
+            forecast_horizon=CONFIG['forecast_horizon'],
+            device=device
         )
     }
     
@@ -828,26 +1068,32 @@ def main():
         print(f"\n{'='*60}")
         print(f"Model: {model_name}")
         print('='*60)
-        
+
         try:
             # Generate forecasts
             predictions = model.forecast(train_panel, val_panel)
-            
+
             if predictions is not None and len(predictions) > 0:
-                # Evaluate
-                metrics = evaluate_forecasts(predictions, val_panel, model_name)
-                
+                # Evaluate (pass model and train_panel for counterfactual validity)
+                metrics = evaluate_forecasts(
+                    predictions,
+                    val_panel,
+                    model_name,
+                    model=model,
+                    train_panel=train_panel
+                )
+
                 if metrics is not None:
                     all_results[model_name] = metrics
                     all_predictions[model_name] = predictions
-                    
+
                     if CONFIG['verbose']:
                         print_metrics(metrics, model_name)
                 else:
                     print(f"  Evaluation failed for {model_name}")
             else:
                 print(f"  No predictions generated for {model_name}")
-                
+
         except Exception as e:
             print(f"  ERROR with {model_name}: {e}")
             import traceback
@@ -857,20 +1103,19 @@ def main():
     print("\n" + "=" * 80)
     print("[4/4] Comparing models...")
     print("=" * 80)
-    
+
     if all_results:
         comparison = compare_models(all_results, metric='wmape')
-        
-        print("\n" + "=" * 80)
-        print("MODEL COMPARISON (sorted by WMAPE)")
-        print("=" * 80)
-        print(comparison.to_string())
-        print("=" * 80)
-        
+
+        # Print comprehensive comparison summary and save to file
+        summary_file = os.path.join(CONFIG['output_dir'], 'foundation_ts_model_comparison.txt')
+        print_comparison_summary(comparison, sort_metric='wmape', output_file=summary_file)
+
         # Find best model
         best_model_name = comparison.index[0]
-        print(f"\nBest model: {best_model_name}")
-        print(f"WMAPE: {comparison.loc[best_model_name, 'wmape']:.4f}")
+        print(f"\n{'='*100}")
+        print(f"BEST MODEL: {best_model_name}")
+        print(f"{'='*100}")
         
         # Save results
         if CONFIG['save_results']:

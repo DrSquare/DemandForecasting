@@ -34,7 +34,8 @@ from model_training import (
 from evaluation_metrics import (
     print_metrics, compare_models, evaluate_model,
     counterfactual_validity_by_store_week,
-    counterfactual_validity_choice_model_by_store_week
+    counterfactual_validity_choice_model_by_store_week,
+    print_comparison_summary
 )
 
 
@@ -971,21 +972,18 @@ def main():
     print("\n" + "=" * 80)
     print("[5/5] Comparing all models...")
     print("=" * 80)
-    
+
     comparison = compare_models(all_results, metric='wmape')
-    
-    print("\n" + "=" * 80)
-    print("MODEL COMPARISON (sorted by WMAPE)")
-    print("=" * 80)
-    print(comparison.to_string())
-    print("=" * 80)
-    
+
+    # Print comprehensive comparison summary and save to file
+    summary_file = os.path.join(CONFIG['output_dir'], 'baseline_model_comparison.txt')
+    print_comparison_summary(comparison, sort_metric='wmape', output_file=summary_file)
+
     # Find best model
     best_model_name = comparison.index[0]
-    print(f"\nBest model: {best_model_name}")
-    print(f"WMAPE: {comparison.loc[best_model_name, 'wmape']:.4f}")
-    if 'r2' in comparison.columns:
-        print(f"R²: {comparison.loc[best_model_name, 'r2']:.4f}")
+    print(f"\n{'='*100}")
+    print(f"BEST MODEL: {best_model_name}")
+    print(f"{'='*100}")
     
     # Save results
     if CONFIG['save_results']:

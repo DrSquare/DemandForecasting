@@ -102,7 +102,7 @@ def counterfactual_validity_by_store_week(
     df_test: pd.DataFrame,
     model,
     X_test: pd.DataFrame,
-    in_log_space: bool = True,
+    in_log_space: bool = False,
     price_multiplier: float = 0.9,
     random_seed: int = 42
 ) -> float:
@@ -337,22 +337,108 @@ def print_metrics(metrics: Dict[str, float], model_name: str = "Model") -> None:
     print("=" * 80)
 
 
-def compare_models(model_results: Dict[str, Dict[str, float]], 
+def compare_models(model_results: Dict[str, Dict[str, float]],
                   metric: str = 'rmse') -> pd.DataFrame:
     """
     Compare multiple models based on a specific metric.
-    
+
     Args:
         model_results: Dictionary mapping model names to their metrics dictionaries
         metric: Metric to sort by (default: 'rmse')
-        
+
     Returns:
         DataFrame with models ranked by the specified metric
     """
     comparison_df = pd.DataFrame(model_results).T
-    
+
+    # Ensure consistent column order for better readability
+    desired_order = ['rmse', 'r2', 'mape', 'wmape', 'mpe', 'counterfactual_validity']
+    existing_cols = [col for col in desired_order if col in comparison_df.columns]
+    comparison_df = comparison_df[existing_cols]
+
     # Sort by metric (ascending for error metrics, descending for R²)
     ascending = metric != 'r2'
     comparison_df = comparison_df.sort_values(by=metric, ascending=ascending)
-    
+
     return comparison_df
+
+
+def print_comparison_summary(comparison_df: pd.DataFrame, sort_metric: str = 'wmape', output_file: str = None) -> None:
+    """
+    Print a formatted comparison summary of all models and optionally save to file.
+
+    Args:
+        comparison_df: DataFrame with model comparison (from compare_models)
+        sort_metric: Metric used for sorting (for display purposes)
+        output_file: Optional path to save the summary as a text file
+    """
+    # Build the summary text
+    lines = []
+    lines.append("=" * 100)
+    lines.append(f"MODEL COMPARISON SUMMARY (sorted by {sort_metric.upper()})")
+    lines.append("=" * 100)
+
+    # Create a formatted version with better column names and formatting
+    formatted_df = comparison_df.copy()
+
+    # Rename columns for display
+    column_display_names = {
+        'rmse': 'RMSE',
+        'r2': 'R²',
+        'mape': 'MAPE',
+        'wmape': 'WMAPE',
+        'mpe': 'MPE',
+        'counterfactual_validity': 'CF Invalid %'
+    }
+
+    formatted_df.columns = [column_display_names.get(col, col) for col in formatted_df.columns]
+
+    # Format numeric values for better readability
+    table_str = formatted_df.to_string(float_format=lambda x: f'{x:.6f}')
+    lines.append(table_str)
+    lines.append("=" * 100)
+
+    # Add summary statistics
+    lines.append("")
+    lines.append("Key Metrics Summary:")
+    lines.append("-" * 100)
+
+    if 'WMAPE' in formatted_df.columns:
+        best_wmape_model = formatted_df['WMAPE'].idxmin()
+        lines.append(f"  Best WMAPE:   {best_wmape_model:30s} = {formatted_df.loc[best_wmape_model, 'WMAPE']:.6f}")
+
+    if 'RMSE' in formatted_df.columns:
+        best_rmse_model = formatted_df['RMSE'].idxmin()
+        lines.append(f"  Best RMSE:    {best_rmse_model:30s} = {formatted_df.loc[best_rmse_model, 'RMSE']:.6f}")
+
+    if 'R²' in formatted_df.columns:
+        best_r2_model = formatted_df['R²'].idxmax()
+        lines.append(f"  Best R²:      {best_r2_model:30s} = {formatted_df.loc[best_r2_model, 'R²']:.6f}")
+
+    if 'CF Invalid %' in formatted_df.columns:
+        # Only consider models with non-zero counterfactual validity (0.0 means "not computed")
+        cf_models = formatted_df[formatted_df['CF Invalid %'] > 0.0]
+        if len(cf_models) > 0:
+            best_cf_model = cf_models['CF Invalid %'].idxmin()
+            lines.append(f"  Best CF:      {best_cf_model:30s} = {formatted_df.loc[best_cf_model, 'CF Invalid %']:.6f} ({formatted_df.loc[best_cf_model, 'CF Invalid %']*100:.2f}% invalid)")
+
+    lines.append("-" * 100)
+    lines.append("")
+    lines.append("Notes:")
+    lines.append("  - Lower is better for: RMSE, MAPE, WMAPE, MPE (absolute value), CF Invalid %")
+    lines.append("  - Higher is better for: R²")
+    lines.append("  - CF Invalid % of 0.0 means counterfactual validity was not computed (model doesn't use price)")
+    lines.append("=" * 100)
+
+    # Print to console
+    summary_text = "\n" + "\n".join(lines)
+    print(summary_text)
+
+    # Save to file if specified
+    if output_file:
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines))
+            print(f"\n  Summary saved to: {output_file}")
+        except Exception as e:
+            print(f"\n  WARNING: Could not save summary to file: {e}")
